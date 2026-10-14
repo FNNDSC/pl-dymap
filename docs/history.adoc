@@ -1,0 +1,27 @@
+= pl-dymap: history
+:toc:
+
+== Abstract
+
+pl-dymap was written on 2026-10-14 to give pl-freesurfer parallelism across subjects without running several `recon-all` in one container. It generalises the fan-out the lab's two earlier dynamic plugins each wrote for their own domain, and its design was settled in one discussion that moved from a planner and executor split, through the question of where control belongs in ChRIS, to a single plugin in the feed.
+
+== Before: pl-dylld and pl-dyanon
+
+pl-dylld, of 2022, built the leg-length discrepancy flow at run time: for each input it ran `chrispl-run` through a shell to post a pl-shexec copy branch under its parent, scheduled the leg-length pipeline off that branch, polled CUBE until named nodes finished, and joined branches with pl-topologicalcopy. Its parser carried CUBE and Orthanc credentials as flags with defaults. pl-dyanon, written by Sandip Samal from 2024 on the python-chrisapp-template and in production by 2026, was independent code with the same shape: for each row of a CSV it posted a whole PACS query, retrieve and verify pipeline as one workflow through CUBE's workflow API, fanned in with pl-topologicalcopy over each workflow's highest-numbered instance, and read `CHRIS_USER_TOKEN` and `CHRIS_PREV_PLG_INST_ID` from the job environment. The review found in it no structured record of what was created, no protection against a restarted job posting every row again, a failure monitor started as an asyncio task that `asyncio.run` cancelled before it ran, and Orthanc credentials copied into every child's parameters and printed into the output log.
+
+== The design discussion
+
+pl-freesurfer's memory, measured at 15.7 GB for SynthSeg in the 8.2.0 image, set its minimum at 32Gi and made shexec's `--threads` a certain out-of-memory kill at two subjects; shexec 2.3.0 added `PluginSpec.omit` so pl-freesurfer could decline the flag, and scaling became one instance per subject. A first proposal split the fan-out into a pure planner plugin and an executor, the executor to be retired when CUBE learned to read plans. The operator rejected the separate executor, and then the premise behind it, with the data-state model of ChRIS: control is legitimate in ChRIS when it is materialised in the same graph it acts on, as a node whose code, parameters and decisions are part of the provenance, and illegitimate when it lives at a hidden level, which a CUBE rule that read plans and grew the graph would be, and which a client script outside the feed would be more so. Attaching the created workflows to the data node, as pl-dylld and pl-dyanon do, was confirmed as correct, since each workflow's data comes from that node and the pl-dymap node records why the workflows exist. The planner and executor survived only as the structure of the code: a pure function that computes the plan, and a thin step that posts it.
+
+== Decisions
+
+The unit of fan-out is a pipeline workflow, so that a heavy plugin's resources and options are set in its pipeline and pl-dymap needs no knowledge of them. The items are directories at a depth below the input, with the stack's directory-filter grammar, because a data node often holds its subjects one level down, as the live test found with pl-dircopy's link directory. Each workflow's receiving parameter, by default `dirFilter`, is given an anchored regular expression over the item's path. The token comes only from `CHRIS_USER_TOKEN`; no credential is a flag or passed to a child. The CUBE URL is a flag until CUBE injects its address, and falls back to `CHRIS_URL` for that day. Partial failure exits 1, since a half-made fan-out should show as failed and a rerun completes it. Joins are a later plugin, and authCore, the lab's credential-broker design, is left for the day a mapped pipeline needs an external secret.
+
+== Versions
+
+[cols="1,4"]
+|===
+| Version | Notes
+
+| 1.0.0 | First release, verified live on miniChRIS with CUBE 6.11.0.
+|===

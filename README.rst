@@ -1,0 +1,77 @@
+pl-dymap
+========
+
+*Map a ChRIS pipeline over the directories of an input: one workflow per item, run in parallel.*
+
+Why it exists
+-------------
+
+A ChRIS plugin runs in one container with one memory limit. Some programs need most of a machine for one input: FreeSurfer 8's ``recon-all`` peaks near 16 GB per subject. A plugin that loops over forty subjects in its one container runs them one after another, for days. One that runs them side by side in that container runs out of memory and loses all of them.
+
+The way out is one plugin instance per subject. ChRIS schedules each instance as its own container, with its own memory, on whatever node has room, and each succeeds or fails alone. But a ChRIS pipeline is a fixed graph. It has no step that means "one branch per directory found here," and the number of subjects is not known until the data arrives.
+
+pl-dymap is that step. It is an ordinary plugin in the feed: it looks at its input, decides one workflow per item, writes that decision down, and asks CUBE to create the workflows beside it. The decision and its result stay in the feed as data, like the output of any other node, so anyone reading the feed can see why the branches exist.
+
+What it does
+------------
+
+Attach pl-dymap to a data node holding subjects and name a pipeline:
+
+.. code-block:: console
+
+    dymap --pipeline "FreeSurfer 8.2.0 per subject" --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
+
+For each directory of the input, here ``sub-01`` to ``sub-40``, pl-dymap creates one workflow of that pipeline under the same data node. Each workflow's plugin is given a filter that selects its own subject and nothing else, by default ``--dirFilter re:^sub\-01$``, so the plugin sees the whole input but processes one directory. The feed afterwards looks like this:
+
+.. code-block:: text
+
+    data node (sub-01 ... sub-40)
+    ├── pl-dymap                         plan.json, created.json
+    ├── workflow sub-01: pl-freesurfer   its own 32Gi container
+    ├── workflow sub-02: pl-freesurfer   its own 32Gi container
+    └── ...
+
+pl-dymap does not wait for the workflows; it creates them and exits. Its output holds two files:
+
+* ``plan.json``, written before anything is created: the pipeline, and each item with the title and filter it gets.
+* ``created.json``, written after: for each item, whether it was posted, skipped or failed, with its workflow and plugin-instance ids or the reason it failed.
+
+Running it again does not duplicate work. An item whose workflow from this pipeline already hangs off the data node, with the item's name as its title, is skipped, so a rerun after a partial failure creates only what is missing.
+
+Where the items are
+-------------------
+
+By default the items are the input's own subdirectories. A data node often holds its data one level down: pl-dircopy, for example, presents an upload as a single directory named for where it came from, such as ``home_chris_uploads_subjects``, with the subjects inside it. ``--itemDepth 2`` reaches them without needing that name, and each child's filter then matches the item's full path. ``--dirFilter`` narrows which directories are items. Items are titled by their own name, which must be unique among them.
+
+Guards
+------
+
+pl-dymap checks its plan against CUBE before creating anything. The pipeline must exist by exact name. The parameter that receives the item, ``--itemParam``, must be a parameter of the piping that receives it: CUBE silently ignores an unknown parameter, so a misspelt ``dirFiltr`` would otherwise hand every workflow the whole input. ``--maxItems``, by default 100, refuses an input with more items, so that a mistaken input cannot flood the cluster. ``--dryRun`` writes the plan and creates nothing.
+
+Authority
+---------
+
+pl-dymap speaks to CUBE with the token CUBE gives every plugin job, ``CHRIS_USER_TOKEN``, and attaches the workflows to the data node CUBE names in ``CHRIS_PREV_PLG_INST_ID``. The token is never a flag, never written to the output, and never printed. CUBE does not yet tell a job its own address, so ``--CUBEurl`` names it, as reachable from inside the job's container, or the job's ``CHRIS_URL`` environment variable does.
+
+That token is the job owner's full API token, as CUBE gives it to every plugin today. pl-dymap uses it only to read pipelines and instances and to create workflows under its own data node, but the token itself is not limited to that.
+
+Pipelines
+---------
+
+Each heavy plugin gets a small pipeline, usually of one piping, whose plugin takes ``--dirFilter``. pl-freesurfer's is one piping of pl-freesurfer; its own minimum memory, 32Gi, sizes every workflow. A pipeline of several pipings works too: ``--itemPiping`` names the one that receives the item, and ``--params`` sets further values on any piping, by title.
+
+Exit status
+-----------
+
+0 when every item was created or skipped; 1 when the plan was refused or rejected, CUBE could not be reached, or any item failed; 2 on a usage error, such as no ``--pipeline``. ``dymap --man`` prints the full manual.
+
+Development
+-----------
+
+.. code-block:: console
+
+    uv venv --python /usr/bin/python3.14 .venv
+    uv pip install --python .venv/bin/python -e ".[dev]"
+    .venv/bin/pytest -q
+
+The tests plan over temporary trees, post against a stand-in for CUBE, and exercise the real client against a local HTTP stub, so they need no ChRIS. CI lints and tests on Python 3.11 to 3.14, builds the image on every push to ``main``, and on a ``v*`` tag pushes it to Docker Hub and ghcr.io and uploads the plugin's description to cube.chrisproject.org.
