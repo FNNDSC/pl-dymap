@@ -1,0 +1,26 @@
+= pl-dymap: purpose
+:toc:
+
+== Abstract
+
+pl-dymap is a ChRIS DS plugin that maps a named pipeline over the directories of its input: for each item, by default each subdirectory, it creates one workflow of the pipeline attached to the same data node, with the item's directory selected by an anchored filter, so that ChRIS schedules the items as separate containers that run in parallel and fail independently. It decides before it acts, writing the plan to its output before creating anything and the outcome after, so the decision that grew the feed is itself a data state in the feed. It exists because a ChRIS pipeline is a fixed graph and the number of subjects in a dataset is known only when the data arrives.
+
+== The problem
+
+A ChRIS plugin is one container with one memory limit. A program such as FreeSurfer 8's `recon-all`, which peaks near sixteen gigabytes for one subject, cannot be run for several subjects at once inside one container: two runs in a 32Gi container exhaust it and both are killed, and pman restarts the job on its half-written output. pl-freesurfer therefore runs subjects one after another, which for a cohort of forty takes days. The parallelism the cluster could give is reachable only as one plugin instance per subject, each its own container, sized by its plugin and placed by the scheduler on whatever node has room.
+
+A ChRIS pipeline cannot express that. Its graph is fixed when the pipeline is registered, and it has no step that means one branch per directory found. The earlier dynamic plugins of the lab, pl-dylld for leg-length analysis in 2022 and pl-dyanon for bulk anonymization since 2024, solved the same problem for their own domains by speaking to CUBE from inside a plugin, each with its own fan-out code, and each with weaknesses the review of 2026-10-14 recorded: no structured record of what was created, no protection against a restarted job creating everything twice, a join that guessed which node to wait for, and in pl-dyanon credentials passed through child parameters and written to the output log.
+
+== What pl-dymap is
+
+pl-dymap is the fan-out, made general and made once. It is a node in the feed like any other: it consumes its parent's output, produces output, and exits. Its output is its decision and its record, `plan.json` and `created.json`, and its effect is the creation of workflows beside it under the same data node. The data edges stay true, since each workflow consumes the data node's output, which is where its subject's data is; the control edge, why the workflows exist, is the pl-dymap node, its version, its parameters and its two records, readable in the same graph. This follows the data-state model ChRIS rests on: control is not hidden in a scheduler at another level but expressed as a node whose code and decisions are part of the provenance.
+
+The plan is a pure function of the input and the flags, computed and written without CUBE. The posting step then checks the plan against CUBE, the pipeline by exact name and the receiving parameter against the piping's own parameters, since CUBE ignores an unknown parameter and a misspelt one would hand every workflow the whole input; looks for each item among the data node's children, skipping any whose workflow from this pipeline already exists; and creates the rest, recording each outcome and continuing past a failure. It does not wait for the workflows, so it holds no slot while they run and cannot deadlock a full cluster.
+
+== What pl-dymap is not
+
+It is not a scheduler: CUBE and the cluster schedule the workflows, and pl-dymap only creates them. It is not a join: gathering the workflows' results is a separate step, to be a separate plugin that names its inputs. It does not hold secrets: it uses the token CUBE gives every job and passes no credential to the workflows it creates. It is not tied to FreeSurfer: any pipeline whose receiving plugin takes a directory filter can be mapped, and pl-freesurfer's one-piping pipeline is the first.
+
+== The token it relies on
+
+Since CUBE 6.4.0 every plugin job receives the owner's API token as `CHRIS_USER_TOKEN`. pl-dymap uses it, which adds no exposure, since the token is already in every job, but the token is the owner's full and permanent one, not one limited to this feed or this job. A scoped job token, limited to the feed's subtree and expiring with the job, is the change CUBE needs for any plugin of this kind to be safe by construction; pl-dymap's use of the token, reading pipelines and instances and creating workflows under its own data node, is what such a token would need to allow.

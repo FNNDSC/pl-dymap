@@ -1,0 +1,32 @@
+= pl-dymap: architecture
+:toc:
+
+== Abstract
+
+pl-dymap is six modules: `models` holds every record that crosses a function boundary, the plan and the run record among them, each a dataclass; `plan` computes the plan from the input and the flags without CUBE; `cube` is a typed client for the five CUBE calls a plan needs, standard library only; `post` checks the plan against CUBE and creates one workflow per item at most once; `dymap` is the run, writing the plan before posting and the record after; `__main__` holds the parser, the manual and the decorated main. It depends on chris_plugin, pftree for its directory-filter grammar and manual renderer, and pflog for the run's span.
+
+== The plan
+
+`items_find` walks the input to `--itemDepth`, skipping hidden directories, and returns the item paths relative to the input with `/` separators, filtered by `--dirFilter` in pftree's grammar against those paths, the same grammar and the same relative paths the receiving plugin's own `--dirFilter` uses. `plan_build` refuses a plan with no items, more than `--maxItems`, two items with the same final name, which would give two workflows one title, or an item whose value would contain the comma that separates filter tokens. Each item's title is its final name; its value is `--itemTemplate` with `{item}` replaced by its path and `{itemRegex}` by the path escaped for a regular expression, the default `re:^{itemRegex}$` matching that one directory, so that `sub-01` does not also select `sub-010`. The plan records the pipeline, the receiving piping and parameter, the further `--params`, the data node's id from `CHRIS_PREV_PLG_INST_ID`, and the items; it is written as `plan.json` before anything else happens.
+
+== Posting
+
+`target_resolve` finds the pipeline by exact name through CUBE's `name_exact` search, its pipings, and its parameters; the receiving piping is the one titled `--itemPiping`, or the pipeline's only piping. The receiving parameter and every `--params` entry must exist on their pipings, or the plan is rejected and nothing is created. For each item `existing_find` lists the data node's children with the item's title, through the instance search's `previous_id` and `title` filters, matching the title exactly since CUBE's title filter matches substrings, and accepts a child only if it belongs to a workflow of this pipeline. A found item is recorded as skipped with its workflow and instances; otherwise `workflow_post` creates a workflow of the pipeline with `previous_plugin_inst_id` set to the data node, a title of the pipeline's name and the item, and `nodes_info` giving the receiving piping the item's title and value and the `--params` pipings their values, the rest taking the pipeline's defaults. A CUBE error on one item is recorded and the run continues.
+
+== The client
+
+`CubeClient` sends `Accept: application/json`, which CUBE answers with paginated `count`, `next` and `results`, and follows `next` to the end. The token is held in a private attribute, sent only as the `Authorization` header, and kept out of `repr`, records and messages. HTTP errors become `CubeError` with the status and the first five hundred characters of CUBE's answer; an unreachable CUBE is status 0. The posting step takes any object with the client's methods, the `CubeApi` protocol, so the tests drive it with a stand-in.
+
+== The run and its records
+
+`dymap_run` validates the flags, builds and writes the plan, and on `--dryRun` writes a record of planned items and stops, needing no CUBE. Otherwise it takes the URL from `--CUBEurl` or `CHRIS_URL` and the token from `CHRIS_USER_TOKEN`, posts, and writes `created.json`: the CUBE URL, the pipeline and piping ids, the data node, one outcome per item, the counts, the overall status and any error that stopped the run. A refused plan, a rejected plan, a missing token and an unreachable CUBE each leave a `created.json` that says so. The exit status is 0 when every item was posted or skipped, 1 when anything failed or the run could not proceed, 2 on a usage error; `@timed` writes the span on standard error with that status.
+
+== The image and the workflow
+
+The image is `python:3.12-slim` with the package installed; the plugin runs no programs, so it needs nothing else, and asks ChRIS for 100Mi and half a core. The CI workflow is the stack's template: lint and test on Python 3.11 to 3.14, build the image on a push to `main`, and on a `v*` tag check the tag against `__version__`, push to Docker Hub and ghcr.io, and upload the description to cube.chrisproject.org.
+
+== Verification
+
+Eighteen tests and the modules' doctests. The plan finds items at depth one and two, sorts them, anchors their filters, and refuses too many items, colliding names, commas, a template without the item and a depth with no items. Against a stand-in CUBE a run creates one workflow per item under the data node with the exact node information, a rerun skips what exists and creates only a new item, a child of the same title from another pipeline is not taken as ours, a failure on one item leaves the others created and exits 1, a misspelt item parameter or `--params` entry is rejected before anything is created, and an unknown pipeline, missing environment and malformed flags give 1 or 2. The real client follows pagination, sends the token, posts the workflow body CUBE expects and maps errors, against a local HTTP stub. The token appears in no output file, console line or `repr`. The parser serialises for ChRIS with no required flag, and `chris_plugin_info` describes the installed package.
+
+The plugin was then run live on a miniChRIS with CUBE 6.11.0, pfcon 5.2.3 and pman 6.2.0. Three subject directories were uploaded and copied into a feed by pl-dircopy, whose node presents them under one link directory, and a one-piping pipeline of pl-shexec counting lines was registered. A dry run under the data node read the node's id from the job environment and wrote both records. A real run with `--itemDepth 2` created three workflows under the data node, titled `sub-01`, `sub-010` and `sub-02`; each finished successfully, and each child's job record shows it processed its own subject's file and no other, `sub-01`'s anchored filter not selecting `sub-010`. A second run skipped all three. A run with `--itemParam dirFiltr` was rejected, finished with error in ChRIS, and created nothing. The token appeared in none of the feed's files, instance records or parameters.
