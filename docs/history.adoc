@@ -17,6 +17,10 @@ pl-freesurfer's memory, measured at 15.7 GB for SynthSeg in the 8.2.0 image, set
 
 The unit of fan-out is a pipeline workflow, so that a heavy plugin's resources and options are set in its pipeline and pl-dymap needs no knowledge of them. The items are directories at a depth below the input, with the stack's directory-filter grammar, because a data node often holds its subjects one level down, as the live test found with pl-dircopy's link directory. Each workflow's receiving parameter, by default `dirFilter`, is given an anchored regular expression over the item's path. The token comes only from `CHRIS_USER_TOKEN`; no credential is a flag or passed to a child. The CUBE URL is a flag until CUBE injects its address, and falls back to `CHRIS_URL` for that day. Partial failure exits 1, since a half-made fan-out should show as failed and a rerun completes it. Joins are a later plugin, and authCore, the lab's credential-broker design, is left for the day a mapped pipeline needs an external secret.
 
+== 2.0.0: any directory, any plugin
+
+The operator's reading of 1.0.0, the same evening, found it needlessly rigid in two ways and loose in a third. Items were the directories at one depth, so a dataset with subjects at mixed depths, or one whose items are best known by the files they hold, could not be mapped without knowing its layout; 2.0.0 adds `--itemFileFilter`, under which a directory is an item when it holds a file whose name passes the filter, found at any depth unless `--itemDepth` fixes one, and renames the directory filter `--itemDirFilter` so that it is not mistaken for the child's own `--dirFilter`, the parameter the item's value is given by default. A child had to be a pipeline workflow, so a single plugin needed a one-piping pipeline registered first; 2.0.0 adds `--plugin`, by name or name and version, under which each child is a plugin instance created directly, with `--params` naming the plugin's parameters, the checks against CUBE made against the plugin's own parameters, and a rerun recognising earlier children by title and plugin. And values that were not primitives crossed function boundaries as dictionaries, the job's environment, the parsed `--params`, the workflow request, CUBE's decoded answers, and the flags as argparse's namespace, against the stack's rule that every such value is a record in `models`; 2.0.0 makes each one a dataclass, `JobEnv`, `ParamSetting`, `NodeInfo`, `JsonRow`, `Options` and the rest, and keeps CUBE's JSON inside the client, entering as a `JsonRow` and leaving as a record. The flag rename breaks 1.0.0's interface, so the version is 2.0.0, and the plan and record formats are `dymap-plan/2` and `dymap-record/2`.
+
 == Versions
 
 [cols="1,4"]
@@ -24,4 +28,5 @@ The unit of fan-out is a pipeline workflow, so that a heavy plugin's resources a
 | Version | Notes
 
 | 1.0.0 | First release, verified live on miniChRIS with CUBE 6.11.0.
+| 2.0.0 | `--plugin` beside `--pipeline`; items chosen by `--itemFileFilter`, `--itemDirFilter` and `--itemDepth`, at any depth with a file filter; every non-primitive value a record in `models`.
 |===

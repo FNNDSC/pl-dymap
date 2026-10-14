@@ -11,6 +11,7 @@ Key components:
     - parser, main: for chris_plugin, the console script and the tests
 
 Typical usage:
+    dymap --plugin pl-freesurfer --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
     dymap --pipeline "FreeSurfer 8.2.0 per subject" --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
     dymap --man /tmp /tmp
 
@@ -30,9 +31,9 @@ from pftree.manual import Manual, manual_print
 
 from dymap import __version__
 from dymap.dymap import dymap_run
-from dymap.plan import DEFAULT_ITEM_TEMPLATE
+from dymap.models import DEFAULT_ITEM_TEMPLATE, Options
 
-TITLE: str = "Map a pipeline over every directory of the input: one workflow per item"
+TITLE: str = "Map a plugin or pipeline over the directories of the input: one child per item"
 CATEGORY: str = "Utility"
 MIN_MEMORY: str = "100Mi"
 MIN_CPU: str = "500m"
@@ -49,14 +50,15 @@ BANNER_ART: str = r"""
 """
 
 BANNER_TEXT: str = """
-                    Map a pipeline over an input tree
+              Map a plugin or pipeline over an input tree
 
                          -- version {version} --
 
-        A ChRIS DS plugin that creates one workflow of a named pipeline for
-        each directory of its input, each attached to the same
-        data node and given its own directory, so that ChRIS runs the items
-        in parallel, each in its own containers and with its own resources.
+        A ChRIS DS plugin that creates one instance of a named plugin, or one
+        workflow of a named pipeline, for each chosen directory of its input,
+        each attached to the same data node and given its own directory, so
+        that ChRIS runs the items in parallel, each in its own containers and
+        with its own resources.
 """
 
 SYNOPSIS_SHORT: str = """
@@ -67,13 +69,15 @@ SYNOPSIS_SHORT: str = """
     SYNOPSIS
 
         dymap                                                                   \\
-            --pipeline <name>                                                   \\
+            --plugin <name>[@<version>] | --pipeline <name>                     \\
             [--itemPiping <title>]                                              \\
             [--itemParam <parameter>]                                           \\
             [--itemTemplate <template>]                                         \\
             [--params <json>]                                                   \\
-            [--dirFilter <filter>]                                              \\
-            [--dirFilterLogic <AND|OR>]                                         \\
+            [--itemFileFilter <filter>]                                         \\
+            [--itemFileFilterLogic <AND|OR>]                                    \\
+            [--itemDirFilter <filter>]                                          \\
+            [--itemDirFilterLogic <AND|OR>]                                     \\
             [--itemDepth <n>]                                                   \\
             [--maxItems <n>]                                                    \\
             [--dryRun]                                                          \\
@@ -84,7 +88,7 @@ SYNOPSIS_SHORT: str = """
 
     BRIEF EXAMPLE
 
-        dymap --pipeline "FreeSurfer 8.2.0 per subject"                         \\
+        dymap --plugin pl-freesurfer --itemFileFilter 'glob:*.nii.gz'           \\
               --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
 """
 
@@ -93,32 +97,39 @@ SYNOPSIS_FULL: str = (
     + f"""
     DESCRIPTION
 
-        ``dymap`` runs a pipeline once per item of its input. Each directory
-        at ``--itemDepth`` below the input, by default its own subdirectories,
-        is an item; ``--dirFilter`` narrows which. For
-        each item the plugin creates one workflow of the pipeline, attached to
-        the same data node as the plugin itself, with the item's value given
-        to one parameter of one piping, by default ``--dirFilter`` set to a
-        filter that matches that directory's path alone. ChRIS then schedules each
-        workflow on its own, so the items run in parallel, each in its own
-        containers and with the resources its pipeline asks for, and each
-        succeeds or fails alone.
+        ``dymap`` runs a plugin, or a pipeline, once per item of its input.
+        The items are directories of the input, chosen by up to three
+        conditions: ``--itemFileFilter``, that the directory holds a file
+        whose name passes the filter; ``--itemDirFilter``, that its path
+        passes the filter; and ``--itemDepth``, how far below the input it
+        is. With none of them the items are the input's own subdirectories;
+        with a file filter alone they are the directories, at any depth, that
+        hold a matching file.
+
+        For each item the plugin creates one child attached to the same data
+        node as itself: an instance of the ``--plugin``, or a workflow of the
+        ``--pipeline``. The item's value goes to one parameter, by default
+        ``--dirFilter`` set to a filter that matches that directory's path
+        alone, so the child sees the whole input but processes one directory.
+        ChRIS then schedules each child on its own, so the items run in
+        parallel, each in its own containers and with the resources its
+        plugin asks for, and each succeeds or fails alone.
 
         The plugin decides before it acts. It writes ``plan.json``, the items
         and the value each gets, before it creates anything, and
-        ``created.json`` after, with each item's workflow and plugin instances
-        or the reason it failed. Both stay in the feed as the record of why
-        the workflows exist. A rerun does not duplicate: an item whose
-        workflow from this pipeline already hangs off the data node, with the
-        item's name as its title, is skipped.
+        ``created.json`` after, with each item's plugin instances and
+        workflow, or the reason it failed. Both stay in the feed as the record
+        of why the children exist. A rerun does not duplicate: an item whose
+        child already hangs off the data node, with the item's name as its
+        title and made from the same plugin or pipeline, is skipped.
 
         The plan is checked against CUBE before anything is created: the
-        pipeline must exist by exact name, and the item parameter and every
-        ``--params`` entry must be parameters of the pipings they name, since
-        CUBE ignores an unknown one and a misspelt item parameter would give
-        every workflow the whole input.
+        plugin or pipeline must exist by exact name, and the item parameter
+        and every ``--params`` entry must be parameters of what they name,
+        since CUBE ignores an unknown one and a misspelt item parameter would
+        give every child the whole input.
 
-        The plugin does not wait for the workflows. It speaks to CUBE with the
+        The plugin does not wait for its children. It speaks to CUBE with the
         token CUBE gives every job, CHRIS_USER_TOKEN, which is never a flag and
         never written down; the data node is CHRIS_PREV_PLG_INST_ID. CUBE does
         not yet tell a job its own address, so ``--CUBEurl`` names it, or the
@@ -132,22 +143,27 @@ SYNOPSIS_FULL: str = (
     ARGS
 
         <inputDir>
-        The data node's output, as ChRIS mounts it. Its directories at
-        ``--itemDepth`` are the items.
+        The data node's output, as ChRIS mounts it. Its chosen directories
+        are the items.
 
         <outputDir>
         Where ``plan.json`` and ``created.json`` are written.
 
+        --plugin <name>[@<version>]
+        The plugin each item gets one instance of, by exact name, at the
+        version given or else the newest registered. One of ``--plugin`` and
+        ``--pipeline`` is required.
+
         --pipeline <name>
-        The exact name of the pipeline each item gets. Required.
+        The exact name of the pipeline each item gets one workflow of.
 
         [--itemPiping <title>]
-        The title of the piping that receives the item. May be omitted when
-        the pipeline has one piping.
+        For a pipeline, the title of the piping that receives the item. May
+        be omitted when the pipeline has one piping.
 
         [--itemParam <parameter>]
-        The parameter of that piping set to the item's value. Default
-        ``dirFilter``.
+        The parameter of the plugin, or of the item piping, set to the item's
+        value. Default ``dirFilter``.
 
         [--itemTemplate <template>]
         How the value is built from the item: ``{{item}}`` is its path below
@@ -157,22 +173,28 @@ SYNOPSIS_FULL: str = (
         directory; a plain ``sub-01`` would also match ``sub-010``.
 
         [--params <json>]
-        Further parameter values for every workflow, by piping title and then
-        parameter name, as ``{{"recon": {{"verbosity": 2}}}}``.
+        Further parameter values for every child. For a plugin, by parameter
+        name, as ``{{"verbosity": 2}}``; for a pipeline, by piping title and
+        then parameter name, as ``{{"recon": {{"verbosity": 2}}}}``.
 
-        [--dirFilter <filter>] [--dirFilterLogic <AND|OR>]
-        Which directories are items, tested against their path below the
-        input, in pftree's filter grammar:
-        comma-separated tokens, each a substring, ``glob:``, ``re:`` or
-        ``!`` negation. Default every directory not starting with a period.
+        [--itemFileFilter <filter>] [--itemFileFilterLogic <AND|OR>]
+        A directory is an item only if it holds, directly, a file whose name
+        passes this filter. With it, and no ``--itemDepth``, items are found
+        at any depth, so a pl-dircopy node, which holds its data under a
+        directory named for where it came from, needs no depth to be known.
+        The filters are pftree's grammar: comma-separated tokens, each a
+        substring, ``glob:``, ``re:`` or ``!`` negation.
+
+        [--itemDirFilter <filter>] [--itemDirFilterLogic <AND|OR>]
+        A directory is an item only if its path below the input passes this
+        filter.
 
         [--itemDepth <n>]
-        How far below the input the items are. Default 1, the input's own
-        subdirectories. A data node made by pl-dircopy holds its data under a
-        directory named for where it came from, as
-        ``home_chris_uploads_subjects``; depth 2 reaches the subjects inside
-        it without naming it. Items are titled by their own name, which must
-        be unique among them.
+        How far below the input the items are, 1 for its own
+        subdirectories. Default 0: any depth when ``--itemFileFilter`` is set,
+        and 1 when it is not. Directories whose names start with a period are
+        never items, and the input itself is never one. Items are titled by
+        their own name, which must be unique among them.
 
         [--maxItems <n>]
         The most items one run may create. Default 100. A larger input is
@@ -196,20 +218,28 @@ SYNOPSIS_FULL: str = (
 
     EXAMPLES
 
-    One FreeSurfer workflow per subject directory:
+    One FreeSurfer instance per directory holding a NIfTI volume, at any
+    depth:
+
+        dymap --plugin pl-freesurfer@1.0.0 --itemFileFilter 'glob:*.nii.gz'     \\
+              --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
+
+    One workflow of a pipeline per subdirectory of the input:
 
         dymap --pipeline "FreeSurfer 8.2.0 per subject"                         \\
               --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
 
-    The same, under a pl-dircopy node, whose subjects sit one level down:
+    Under a pl-dircopy node, whose subjects sit one level down, only those
+    whose names start with sub-0, after looking at the plan:
 
-        dymap --pipeline "FreeSurfer 8.2.0 per subject" --itemDepth 2           \\
+        dymap --plugin pl-freesurfer --itemDepth 2 --dryRun                     \\
+              --itemDirFilter 're:(^|/)sub-0[^/]*$' /incoming /outgoing
+
+    A plugin instance with a further option:
+
+        dymap --plugin pl-shexec --itemFileFilter dcm                           \\
+              --params '{{"exec": "wc -l %{{inputWorkingDir}}"}}'               \\
               --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
-
-    The subjects whose names start with sub-0, after looking at the plan:
-
-        dymap --pipeline "FreeSurfer 8.2.0 per subject" --dryRun                \\
-              --dirFilter 're:(^|/)sub-0[^/]*$' /incoming /outgoing
 
     A two-piping pipeline, the item to the first piping, an option to the
     second:
@@ -223,7 +253,7 @@ SYNOPSIS_FULL: str = (
 MANUAL: Manual = Manual(
     command="dymap",
     art=BANNER_ART,
-    title="Map a pipeline over an input tree",
+    title="Map a plugin or pipeline over an input tree",
     text=BANNER_TEXT,
     version=__version__,
     synopsisShort=SYNOPSIS_SHORT,
@@ -236,34 +266,41 @@ def parser_build() -> argparse.ArgumentParser:
 
     Every flag is a plain ``store`` or ``store_true``, which chris_plugin serialises;
     none is marked required, since ChRIS would then require it in every form, so a
-    missing ``--pipeline`` is caught in the run and exits 2.
+    missing ``--plugin`` or ``--pipeline`` is caught in the run and exits 2.
 
     Example:
-        >>> parser_build().parse_args(["--pipeline", "p"]).itemParam
+        >>> parser_build().parse_args(["--plugin", "pl-x"]).itemParam
         'dirFilter'
     """
+    defaults: Options = Options()
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         prog="dymap",
-        description="Create one workflow of a pipeline per directory of the input. Full manual: dymap --man",
+        description="Create one child, a plugin instance or a workflow, per chosen directory of the input. "
+        "Full manual: dymap --man",
     )
-    parser.add_argument("--pipeline", default="", help="exact name of the pipeline each item gets (required)")
+    parser.add_argument("--plugin", default="", help="plugin each item gets, name or name@version")
+    parser.add_argument("--pipeline", default="", help="exact name of the pipeline each item gets")
     parser.add_argument("--itemPiping", default="", help="title of the piping that receives the item")
-    parser.add_argument("--itemParam", default="dirFilter", help="parameter of that piping set to the item")
+    parser.add_argument("--itemParam", default=defaults.itemParam, help="parameter set to the item")
     parser.add_argument(
         "--itemTemplate",
-        default=DEFAULT_ITEM_TEMPLATE,
-        help="the item's value: {item} is its name, {itemRegex} the name escaped for a regex",
+        default=defaults.itemTemplate,
+        help="the item's value: {item} is its path, {itemRegex} the path escaped for a regex",
     )
-    parser.add_argument("--params", default="", help="JSON of further values: {piping title: {param: value}}")
+    parser.add_argument("--params", default="", help="JSON of further values for every child")
+    parser.add_argument("--itemFileFilter", default="", help="an item holds a file passing this filter")
+    parser.add_argument("--itemFileFilterLogic", default="OR", help="AND or OR, how its tokens combine")
+    parser.add_argument("--itemDirFilter", default="", help="an item's path passes this filter")
+    parser.add_argument("--itemDirFilterLogic", default="OR", help="AND or OR, how its tokens combine")
     parser.add_argument(
-        "--dirFilter", default="", help="which directories are items, by path, pftree grammar"
+        "--itemDepth", type=int, default=defaults.itemDepth, help="depth of the items; 0 for the default"
     )
-    parser.add_argument("--dirFilterLogic", default="OR", help="AND or OR, how --dirFilter tokens combine")
-    parser.add_argument("--itemDepth", type=int, default=1, help="how far below the input the items are")
-    parser.add_argument("--maxItems", type=int, default=100, help="refuse an input with more items than this")
+    parser.add_argument(
+        "--maxItems", type=int, default=defaults.maxItems, help="refuse an input with more items than this"
+    )
     parser.add_argument("--dryRun", action="store_true", default=False, help="write the plan, create nothing")
     parser.add_argument("--CUBEurl", default="", help="CUBE API root as reachable from the job; or CHRIS_URL")
-    parser.add_argument("--verbosity", type=int, default=1, help="0 silences the console")
+    parser.add_argument("--verbosity", type=int, default=defaults.verbosity, help="0 silences the console")
     parser.add_argument("--man", action="store_true", default=False, help="print the full manual")
     parser.add_argument("--synopsis", action="store_true", default=False, help="print the manual's synopsis")
     parser.add_argument("--version", action="version", version=f"dymap {__version__}")
@@ -282,7 +319,7 @@ def dymap(options: argparse.Namespace, inputdir: Path, outputdir: Path) -> int:
     if options.man or options.synopsis:
         manual_print(MANUAL, shortOnly=not options.man)
         return 0
-    return dymap_run(options, inputdir, outputdir)
+    return dymap_run(Options.fromNamespace(options), inputdir, outputdir)
 
 
 main = chris_plugin(
