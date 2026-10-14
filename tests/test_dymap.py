@@ -1,5 +1,5 @@
-"""pl-dymap: the plan, posting against a CUBE stand-in, the real client against a stub server,
-the records, the exit status, and the plugin description."""
+"""pl-dymap: the plan, posting workflows and plugin instances against a CUBE stand-in, the real
+client against a stub server, the records, the exit status, and the plugin description."""
 
 from __future__ import annotations
 
@@ -21,11 +21,26 @@ from dymap import __version__
 from dymap.__main__ import main, parser
 from dymap.cube import CubeClient
 from dymap.dymap import dymap_run
-from dymap.models import CubeError, InstanceRef, PipelineRef, PipingParam, PipingRef, WorkflowRef
-from dymap.plan import PlanRefused, plan_build
+from dymap.models import (
+    CubeError,
+    InstanceRef,
+    ItemSelection,
+    JobEnv,
+    NodeInfo,
+    Options,
+    ParamSetting,
+    PipelineRef,
+    PipingParam,
+    PipingRef,
+    PluginParameter,
+    PluginRef,
+    WorkflowRef,
+)
+from dymap.plan import PlanRefused, items_find, plan_build
 
 TOKEN: str = "tok-3a7c9e1f-never-written"
 PIPELINE: str = "FreeSurfer per subject"
+PLUGIN: str = "pl-freesurfer"
 
 
 def inputTree_make(root: Path, names: tuple[str, ...] = ("sub-01", "sub-02", "sub-010")) -> tuple[Path, Path]:
@@ -40,7 +55,8 @@ def inputTree_make(root: Path, names: tuple[str, ...] = ("sub-01", "sub-02", "su
 
 
 class FakeCube:
-    """A CUBE with one pipeline of one piping, recording every workflow posted."""
+    """A CUBE with one pipeline of one piping and two versions of one plugin, recording every
+    workflow and plugin instance posted."""
 
     def __init__(self, params: tuple[str, ...] = ("dirFilter", "verbosity"), failOn: str = "") -> None:
         self.url: str = "http://cube.test/api/v1/"
@@ -49,6 +65,7 @@ class FakeCube:
         self.posted: list[dict[str, Any]] = []
         self.instances: list[InstanceRef] = []
         self.workflows: dict[int, WorkflowRef] = {}
+        self.instancesPosted: list[dict[str, Any]] = []
 
     def pipeline_find(self, name: str) -> PipelineRef | None:
         return PipelineRef(id=3, name=name) if name == PIPELINE else None
@@ -65,40 +82,82 @@ class FakeCube:
     def workflow_get(self, workflowId: int) -> WorkflowRef:
         return self.workflows[workflowId]
 
+    def plugins_find(self, name: str) -> list[PluginRef]:
+        if name != PLUGIN:
+            return []
+        return [PluginRef(id=5, name=name, version="0.9.0"), PluginRef(id=9, name=name, version="1.0.0")]
+
+    def pluginParams_list(self, pluginId: int) -> list[PluginParameter]:
+        return [PluginParameter(name=name, type="string") for name in self.paramNames]
+
     def workflow_post(
-        self, pipelineId: int, previousId: int, title: str, nodesInfo: list[dict[str, Any]]
+        self, pipelineId: int, previousId: int, title: str, nodes: list[NodeInfo]
     ) -> WorkflowRef:
-        node: dict[str, Any] = nodesInfo[0]
-        if node["title"] == self.failOn:
+        if nodes[0].title == self.failOn:
             raise CubeError(400, "refused")
         workflowId: int = 100 + len(self.posted)
         self.posted.append(
-            {"pipelineId": pipelineId, "previousId": previousId, "title": title, "nodes": nodesInfo}
+            {
+                "pipelineId": pipelineId,
+                "previousId": previousId,
+                "title": title,
+                "nodes": [node.toDict() for node in nodes],
+            }
         )
         self.workflows[workflowId] = WorkflowRef(id=workflowId, pipelineId=pipelineId, title=title)
         self.instances.append(
             InstanceRef(
-                id=1000 + workflowId, title=node["title"], previousId=previousId, workflowId=workflowId
+                id=1000 + workflowId,
+                title=nodes[0].title,
+                previousId=previousId,
+                workflowId=workflowId,
+                pluginId=9,
             )
         )
         return self.workflows[workflowId]
+
+    def instance_post(
+        self, pluginId: int, previousId: int, title: str, settings: list[ParamSetting]
+    ) -> InstanceRef:
+        if title == self.failOn:
+            raise CubeError(400, "refused")
+        instance = InstanceRef(
+            id=2000 + len(self.instancesPosted),
+            title=title,
+            previousId=previousId,
+            workflowId=None,
+            pluginId=pluginId,
+        )
+        self.instancesPosted.append(
+            {
+                "pluginId": pluginId,
+                "previousId": previousId,
+                "title": title,
+                "params": {s.name: s.value for s in settings},
+            }
+        )
+        self.instances.append(instance)
+        return instance
 
     def workflowInstances_list(self, workflowId: int) -> list[InstanceRef]:
         return [i for i in self.instances if i.workflowId == workflowId]
 
 
 def run(
-    options: list[str], inputDir: Path, outputDir: Path, cube: FakeCube, env: dict[str, str] | None = None
+    options: list[str], inputDir: Path, outputDir: Path, cube: FakeCube, env: JobEnv | None = None
 ) -> int:
-    environ: dict[str, str] = (
-        {"CHRIS_USER_TOKEN": TOKEN, "CHRIS_PREV_PLG_INST_ID": "42"} if env is None else env
+    job: JobEnv = JobEnv(token=TOKEN, previousId=42, url="") if env is None else env
+    return dymap_run(
+        Options.fromNamespace(parser.parse_args(options)), inputDir, outputDir, job, lambda url, token: cube
     )
-    return dymap_run(parser.parse_args(options), inputDir, outputDir, lambda url, token: cube, environ)
+
+
+NO_ENV: JobEnv = JobEnv(token="", previousId=None, url="")
 
 
 def test_plan_itemsAreTopLevelDirectories_valuesMatchExactly(tmp_path: Path) -> None:
     inputDir, _ = inputTree_make(tmp_path)
-    plan = plan_build(inputDir, PIPELINE, previousId=42)
+    plan = plan_build(inputDir, Options(pipeline=PIPELINE), [], previousId=42)
     assert [item.item for item in plan.items] == ["sub-01", "sub-010", "sub-02"]
     assert plan.items[0].value == "re:^sub\\-01$"
     assert plan.previousId == 42
@@ -107,12 +166,12 @@ def test_plan_itemsAreTopLevelDirectories_valuesMatchExactly(tmp_path: Path) -> 
 def test_plan_refusesTooManyItems_andCommas(tmp_path: Path) -> None:
     inputDir, _ = inputTree_make(tmp_path)
     with pytest.raises(PlanRefused, match="maxItems"):
-        plan_build(inputDir, PIPELINE, maxItems=2)
+        plan_build(inputDir, Options(pipeline=PIPELINE, maxItems=2), [])
     (inputDir / "a,b").mkdir()
     with pytest.raises(PlanRefused, match="comma"):
-        plan_build(inputDir, PIPELINE)
+        plan_build(inputDir, Options(pipeline=PIPELINE), [])
     with pytest.raises(PlanRefused, match="names neither"):
-        plan_build(inputDir, PIPELINE, itemTemplate="fixed", dirFilter="sub-01")
+        plan_build(inputDir, Options(pipeline=PIPELINE, itemTemplate="fixed", itemDirFilter="sub-01"), [])
 
 
 def test_dryRun_writesPlan_needsNoCube(tmp_path: Path) -> None:
@@ -120,16 +179,20 @@ def test_dryRun_writesPlan_needsNoCube(tmp_path: Path) -> None:
     cube = FakeCube()
     assert (
         run(
-            ["--pipeline", PIPELINE, "--dryRun", "--dirFilter", "re:^sub-0[12]$"],
+            ["--pipeline", PIPELINE, "--dryRun", "--itemDirFilter", "re:^sub-0[12]$"],
             inputDir,
             outputDir,
             cube,
-            {},
+            NO_ENV,
         )
         == 0
     )
     plan = json.loads((outputDir / "plan.json").read_text())
-    assert plan["schema"] == "dymap-plan/1" and [i["item"] for i in plan["items"]] == ["sub-01", "sub-02"]
+    assert (
+        plan["schema"] == "dymap-plan/2"
+        and plan["kind"] == "pipeline"
+        and [i["item"] for i in plan["items"]] == ["sub-01", "sub-02"]
+    )
     record = json.loads((outputDir / "created.json").read_text())
     assert record["counts"]["planned"] == 2 and cube.posted == []
 
@@ -170,7 +233,7 @@ def test_sameTitleFromAnotherPipeline_isNotOurs(tmp_path: Path) -> None:
     inputDir, outputDir = inputTree_make(tmp_path, ("sub-01",))
     cube = FakeCube()
     cube.workflows[9] = WorkflowRef(id=9, pipelineId=99, title="other")
-    cube.instances.append(InstanceRef(id=900, title="sub-01", previousId=42, workflowId=9))
+    cube.instances.append(InstanceRef(id=900, title="sub-01", previousId=42, workflowId=9, pluginId=9))
     assert run(["--pipeline", PIPELINE, "--CUBEurl", cube.url], inputDir, outputDir, cube) == 0
     assert len(cube.posted) == 1
 
@@ -224,9 +287,12 @@ def test_unknownPipeline_and_missingEnvironment(tmp_path: Path) -> None:
     inputDir, outputDir = inputTree_make(tmp_path)
     cube = FakeCube()
     assert run(["--pipeline", "nope", "--CUBEurl", cube.url], inputDir, outputDir, cube) == 1
-    assert run(["--pipeline", PIPELINE, "--CUBEurl", cube.url], inputDir, outputDir, cube, {}) == 1
+    assert run(["--pipeline", PIPELINE, "--CUBEurl", cube.url], inputDir, outputDir, cube, NO_ENV) == 1
     assert run(["--pipeline", PIPELINE], inputDir, outputDir, cube) == 2
     assert run(["--params", "{}"], inputDir, outputDir, cube) == 2
+    assert run(["--pipeline", PIPELINE, "--plugin", PLUGIN], inputDir, outputDir, cube) == 2
+    assert run(["--plugin", PLUGIN, "--itemPiping", "recon"], inputDir, outputDir, cube) == 2
+    assert run(["--pipeline", PIPELINE, "--itemDepth", "-1"], inputDir, outputDir, cube) == 2
     assert (
         run(["--pipeline", PIPELINE, "--params", "[1]", "--CUBEurl", cube.url], inputDir, outputDir, cube)
         == 2
@@ -243,6 +309,7 @@ def test_tokenNeverWrittenOrPrinted(tmp_path: Path, capsys: pytest.CaptureFixtur
         assert TOKEN not in path.read_text()
     assert TOKEN not in captured.out and TOKEN not in captured.err
     assert TOKEN not in repr(CubeClient(cube.url, TOKEN))
+    assert TOKEN not in repr(JobEnv(token=TOKEN, previousId=42, url=""))
 
 
 class StubCube(BaseHTTPRequestHandler):
@@ -295,7 +362,7 @@ def test_client_followsPages_sendsToken_postsWorkflow(stubServer: str) -> None:
     pipings = client.pipings_list(3)
     assert [(p.id, p.previousId) for p in pipings] == [(7, None), (8, 7)]
     assert all(seen["auth"] == f"Token {TOKEN}" for seen in StubCube.seen)
-    workflow = client.workflow_post(3, 42, "p: sub-01", [{"piping_id": 7, "title": "sub-01"}])
+    workflow = client.workflow_post(3, 42, "p: sub-01", [NodeInfo(pipingId=7, title="sub-01")])
     assert workflow.id == 12
     body = StubCube.seen[-1]["body"]
     assert body["previous_plugin_inst_id"] == 42 and json.loads(body["nodes_info"])[0]["piping_id"] == 7
@@ -312,7 +379,20 @@ def test_client_unreachable_isCubeError() -> None:
 
 def test_parser_serialisesForChris_noRequiredFlags() -> None:
     names: set[str] = {spec["name"] for spec in serialize(parser)}
-    assert {"pipeline", "itemPiping", "itemParam", "itemTemplate", "params", "maxItems", "dryRun"} <= names
+    assert {
+        "plugin",
+        "pipeline",
+        "itemPiping",
+        "itemParam",
+        "itemTemplate",
+        "params",
+        "itemFileFilter",
+        "itemDirFilter",
+        "itemDepth",
+        "maxItems",
+        "dryRun",
+    } <= names
+    assert "dirFilter" not in names
     assert "CUBEtoken" not in names and not any(action.required for action in parser._actions)
 
 
@@ -328,7 +408,7 @@ def test_main_manual_andSpan(capsys: pytest.CaptureFixture[str]) -> None:
 def test_chris_plugin_info_describesThePlugin() -> None:
     binDir: Path = Path(sys.executable).parent
     spec = JobSpec(
-        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:1.0.0", "dymap"],
+        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:2.0.0", "dymap"],
         env={"PATH": f"{binDir}{os.pathsep}{os.environ.get('PATH', '')}"},
     )
     result = job_run(spec)
@@ -366,5 +446,87 @@ def test_itemDepth_collidingNames_andNoItems_refused(tmp_path: Path) -> None:
         run(["--pipeline", PIPELINE, "--itemDepth", "5", "--CUBEurl", cube.url], inputDir, outputDir, cube)
         == 1
     )
-    assert run(["--pipeline", PIPELINE, "--itemDepth", "0"], inputDir, outputDir, cube) == 2
     assert cube.posted == []
+
+
+def test_itemFileFilter_findsItemsAtAnyDepth_andCombinesWithDirFilter(tmp_path: Path) -> None:
+    inputDir, _ = inputTree_make(tmp_path, ("link/sub-01", "link/sub-02/anat", "link/sub-03", "link/.cache"))
+    (inputDir / "link/sub-02/anat/t1.nii.gz").write_text("x")
+    (inputDir / "link/sub-03/t1.nii.gz").unlink()
+    (inputDir / "link/sub-03/notes.txt").write_text("x")
+    (inputDir / "link/.cache/t1.nii.gz").write_text("x")
+    nifti = ItemSelection(fileFilter="glob:*.nii.gz")
+    assert items_find(inputDir, nifti) == ["link/sub-01", "link/sub-02/anat"]
+    assert items_find(inputDir, ItemSelection(fileFilter="glob:*.nii.gz", depth=2)) == ["link/sub-01"]
+    assert items_find(inputDir, ItemSelection(fileFilter="glob:*.nii.gz", dirFilter="anat")) == [
+        "link/sub-02/anat"
+    ]
+    assert items_find(inputDir, ItemSelection(fileFilter="notes,t1", fileFilterLogic="OR", depth=2)) == [
+        "link/sub-01",
+        "link/sub-03",
+    ]
+
+
+def test_itemFileFilter_followsALinkOnce(tmp_path: Path) -> None:
+    inputDir, _ = inputTree_make(tmp_path, ("data/sub-01",))
+    (inputDir / "home_chris_uploads").symlink_to(inputDir / "data")
+    (inputDir / "data/loop").symlink_to(inputDir / "data")
+    assert items_find(inputDir, ItemSelection(fileFilter="glob:*.nii.gz")) in (
+        ["data/sub-01"],
+        ["home_chris_uploads/sub-01"],
+    )
+
+
+def test_plugin_oneInstancePerItem_newestVersion_rerunSkips(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("link/sub-01", "link/sub-02"))
+    cube = FakeCube()
+    options: list[str] = ["--plugin", PLUGIN, "--itemFileFilter", "glob:*.nii.gz", "--CUBEurl", cube.url]
+    assert run([*options, "--params", '{"verbosity": 2}'], inputDir, outputDir, cube) == 0
+    assert cube.posted == [] and len(cube.instancesPosted) == 2
+    first = cube.instancesPosted[0]
+    assert first["pluginId"] == 9 and first["previousId"] == 42 and first["title"] == "sub-01"
+    assert first["params"] == {"verbosity": 2, "dirFilter": "re:^link/sub\\-01$"}
+    record = json.loads((outputDir / "created.json").read_text())
+    assert record["pluginId"] == 9 and record["pipelineId"] is None
+    assert record["outcomes"][0]["instanceIds"] == [2000] and record["outcomes"][0]["workflowId"] is None
+    plan = json.loads((outputDir / "plan.json").read_text())
+    assert plan["kind"] == "plugin" and plan["params"] == [{"piping": "", "name": "verbosity", "value": 2}]
+    assert run(options, inputDir, outputDir, cube) == 0
+    assert json.loads((outputDir / "created.json").read_text())["counts"]["skipped"] == 2
+    assert len(cube.instancesPosted) == 2
+
+
+def test_plugin_explicitVersion_otherVersionIsNotOurs(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("sub-01",))
+    cube = FakeCube()
+    cube.instances.append(InstanceRef(id=800, title="sub-01", previousId=42, workflowId=None, pluginId=9))
+    assert run(["--plugin", f"{PLUGIN}@0.9.0", "--CUBEurl", cube.url], inputDir, outputDir, cube) == 0
+    assert [posted["pluginId"] for posted in cube.instancesPosted] == [5]
+
+
+def test_plugin_instanceInsideAWorkflow_isNotOurs(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("sub-01",))
+    cube = FakeCube()
+    assert run(["--pipeline", PIPELINE, "--CUBEurl", cube.url], inputDir, outputDir, cube) == 0
+    assert run(["--plugin", PLUGIN, "--CUBEurl", cube.url], inputDir, outputDir, cube) == 0
+    assert len(cube.posted) == 1 and len(cube.instancesPosted) == 1
+
+
+def test_plugin_rejections_createNothing(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("sub-01",))
+    cube = FakeCube()
+    for options in (
+        ["--plugin", "pl-nope"],
+        ["--plugin", f"{PLUGIN}@3.0.0"],
+        ["--plugin", PLUGIN, "--itemParam", "dirFiltr"],
+        ["--plugin", PLUGIN, "--params", '{"verbosty": 2}'],
+    ):
+        assert run([*options, "--CUBEurl", cube.url], inputDir, outputDir, cube) == 1, options
+        assert json.loads((outputDir / "created.json").read_text())["error"]
+    assert run(["--plugin", PLUGIN, "--params", '{"exec": [1]}'], inputDir, outputDir, cube) == 2
+    assert cube.instancesPosted == []
+
+
+def test_options_fromNamespace_ignoresManualFlags() -> None:
+    options = Options.fromNamespace(parser.parse_args(["--plugin", PLUGIN, "--man"]))
+    assert options.plugin == PLUGIN and options.selection.depthEffective == 1
