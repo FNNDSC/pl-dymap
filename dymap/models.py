@@ -206,9 +206,10 @@ class PlanItem:
 
     Attributes:
         item: the item's path relative to the input, with ``/`` separators.
-        title: the item's own name, the last component of its path: the title of the
-            child plugin instance, or of the child workflow's root node, which is
-            also how a rerun recognises a child already created.
+        title: the shortest end of the item's path unique among the items, usually
+            its own name: the title of the child plugin instance, or of the child
+            workflow's root node, which is also how a rerun recognises a child
+            already created.
         value: the value given to the item parameter.
 
     Example:

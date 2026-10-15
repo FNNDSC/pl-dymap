@@ -1,7 +1,7 @@
 # pl-dymap: Python and the package; the plugin runs no programs of its own.
 #
-#   docker build -t localhost/fnndsc/pl-dymap:2.0.0 .
-#   docker run --rm localhost/fnndsc/pl-dymap:2.0.0 dymap --version
+#   docker build -t localhost/fnndsc/pl-dymap:2.1.0 .
+#   docker run --rm localhost/fnndsc/pl-dymap:2.1.0 dymap --version
 
 FROM docker.io/python:3.12-slim
 
@@ -9,7 +9,7 @@ LABEL org.opencontainers.image.authors="FNNDSC <dev@babyMRI.org>" \
       org.opencontainers.image.title="pl-dymap" \
       org.opencontainers.image.description="Map a ChRIS pipeline over the directories of an input: one workflow per item" \
       org.opencontainers.image.source="https://github.com/FNNDSC/pl-dymap" \
-      org.opencontainers.image.version="2.0.0"
+      org.opencontainers.image.version="2.1.0"
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 

@@ -36,7 +36,7 @@ from dymap.models import (
     PluginRef,
     WorkflowRef,
 )
-from dymap.plan import PlanRefused, items_find, plan_build
+from dymap.plan import PlanRefused, items_find, plan_build, titles_assign
 
 TOKEN: str = "tok-3a7c9e1f-never-written"
 PIPELINE: str = "FreeSurfer per subject"
@@ -408,7 +408,7 @@ def test_main_manual_andSpan(capsys: pytest.CaptureFixture[str]) -> None:
 def test_chris_plugin_info_describesThePlugin() -> None:
     binDir: Path = Path(sys.executable).parent
     spec = JobSpec(
-        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:2.0.0", "dymap"],
+        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:2.1.0", "dymap"],
         env={"PATH": f"{binDir}{os.pathsep}{os.environ.get('PATH', '')}"},
     )
     result = job_run(spec)
@@ -434,19 +434,64 @@ def test_itemDepth_reachesSubjectsUnderALink_titlesAreNames(tmp_path: Path) -> N
     ]
 
 
-def test_itemDepth_collidingNames_andNoItems_refused(tmp_path: Path) -> None:
-    inputDir, outputDir = inputTree_make(tmp_path, ("a/sub-01", "b/sub-01"))
+def test_noItems_refused(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("a/sub-01",))
     cube = FakeCube()
-    assert (
-        run(["--pipeline", PIPELINE, "--itemDepth", "2", "--CUBEurl", cube.url], inputDir, outputDir, cube)
-        == 1
-    )
-    assert "share the name 'sub-01'" in json.loads((outputDir / "created.json").read_text())["error"]
     assert (
         run(["--pipeline", PIPELINE, "--itemDepth", "5", "--CUBEurl", cube.url], inputDir, outputDir, cube)
         == 1
     )
+    assert "no items" in json.loads((outputDir / "created.json").read_text())["error"]
     assert cube.posted == []
+
+
+def test_seriesNamedAlike_titledByEnoughPath_rerunSkips(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(
+        tmp_path,
+        (
+            "link/sub-01/MPRAGE",
+            "link/sub-01/localizer",
+            "link/sub-02/MPRAGE",
+            "link/sub-02/MPRAGE_2",
+            "link/sub-02/localizer",
+        ),
+    )
+    for series in inputDir.glob("link/*/*"):
+        (series / "t1.nii.gz").rename(series / "IM0001.dcm")
+    cube = FakeCube()
+    options: list[str] = [
+        "--plugin",
+        PLUGIN,
+        "--itemFileFilter",
+        "glob:*.dcm",
+        "--itemDirFilter",
+        "re:MPRAGE[^/]*$",
+        "--params",
+        '{"fileFilter": "glob:*.dcm"}',
+        "--CUBEurl",
+        cube.url,
+    ]
+    cube.paramNames = ("dirFilter", "fileFilter")
+    assert run(options, inputDir, outputDir, cube) == 0
+    assert [posted["title"] for posted in cube.instancesPosted] == [
+        "sub-01/MPRAGE",
+        "sub-02/MPRAGE",
+        "MPRAGE_2",
+    ]
+    assert cube.instancesPosted[0]["params"] == {
+        "fileFilter": "glob:*.dcm",
+        "dirFilter": "re:^link/sub\\-01/MPRAGE$",
+    }
+    assert run(options, inputDir, outputDir, cube) == 0
+    assert json.loads((outputDir / "created.json").read_text())["counts"]["skipped"] == 3
+    assert len(cube.instancesPosted) == 3
+
+
+def test_titles_keepTheirEnd_withinCubesLimit() -> None:
+    longName: str = "x" * 120
+    assert titles_assign([f"a/{longName}", "b/y"]) == ["x" * 100, "y"]
+    with pytest.raises(PlanRefused, match="no longer unique"):
+        titles_assign([f"a/{longName}", f"b/{longName}"])
 
 
 def test_itemFileFilter_findsItemsAtAnyDepth_andCombinesWithDirFilter(tmp_path: Path) -> None:
