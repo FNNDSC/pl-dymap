@@ -121,7 +121,9 @@ SYNOPSIS_FULL: str = (
         workflow, or the reason it failed. Both stay in the feed as the record
         of why the children exist. A rerun does not duplicate: an item whose
         child already hangs off the data node, with the item's name as its
-        title and made from the same plugin or pipeline, is skipped.
+        title and made from the same plugin or pipeline, is skipped, unless
+        it was cancelled or finished with an error, in which case it is made
+        again.
 
         The plan is checked against CUBE before anything is created: the
         plugin or pipeline must exist by exact name, and the item parameter

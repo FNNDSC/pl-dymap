@@ -204,12 +204,17 @@ def existing_find(item: PlanItem, previousId: int, target: Target, client: CubeA
 
     A child counts when its title is the item's and it belongs to a workflow of this
     pipeline, or, for a plugin, runs this plugin on its own, outside any workflow; a
-    child of the same title made from something else is someone else's.
+    child of the same title made from something else is someone else's. A child that
+    CUBE cancelled or that finished with an error does not count, nor does a workflow
+    any of whose instances did, so a rerun makes the item again; a child still
+    running counts, since it may yet succeed.
 
     Example:
         found = existing_find(item, 4985, target, client)
     """
     for instance in client.children_find(previousId, item.title):
+        if instance.failed:
+            continue
         if target.plugin is not None:
             if instance.pluginId == target.plugin.id and instance.workflowId is None:
                 return instance
@@ -217,6 +222,7 @@ def existing_find(item: PlanItem, previousId: int, target: Target, client: CubeA
             target.pipeline is not None
             and instance.workflowId is not None
             and client.workflow_get(instance.workflowId).pipelineId == target.pipeline.id
+            and not any(member.failed for member in client.workflowInstances_list(instance.workflowId))
         ):
             return instance
     return None

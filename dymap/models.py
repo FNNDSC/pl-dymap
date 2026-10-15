@@ -42,6 +42,7 @@ ENV_PREVIOUS: str = "CHRIS_PREV_PLG_INST_ID"
 ENV_URL: str = "CHRIS_URL"
 
 OutcomeStatus = Literal["planned", "posted", "skipped", "failed"]
+FAILED_STATUSES: frozenset[str] = frozenset({"cancelled", "finishedWithError"})
 TargetKind = Literal["pipeline", "plugin"]
 ParamValue = str | int | float | bool
 
@@ -436,6 +437,7 @@ class InstanceRef:
         previousId: the instance above it.
         workflowId: the workflow it belongs to, ``None`` when it was run on its own.
         pluginId: the plugin it runs.
+        status: CUBE's status for it, as ``started`` or ``finishedWithError``.
 
     Example:
         >>> InstanceRef(id=9, title="sub-01", previousId=4, workflowId=2, pluginId=6).workflowId
@@ -447,6 +449,17 @@ class InstanceRef:
     previousId: int | None
     workflowId: int | None
     pluginId: int | None = None
+    status: str = ""
+
+    @property
+    def failed(self) -> bool:
+        """True when CUBE cancelled it or it finished with an error.
+
+        Example:
+            >>> InstanceRef(1, "a", 4, None, status="cancelled").failed
+            True
+        """
+        return self.status in FAILED_STATUSES
 
 
 @dataclass
@@ -656,6 +669,7 @@ __all__: list[str] = [
     "ENV_PREVIOUS",
     "ENV_TOKEN",
     "ENV_URL",
+    "FAILED_STATUSES",
     "PLAN_SCHEMA",
     "RECORD_SCHEMA",
     "CubeError",

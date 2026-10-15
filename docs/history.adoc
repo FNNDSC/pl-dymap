@@ -25,6 +25,10 @@ The operator's reading of 1.0.0, the same evening, found it needlessly rigid in 
 
 The operator's DICOM data commonly holds several series directories per subject, `subjN/<series>/*.dcm`, with every series that needs a reconstruction named alike across subjects, such as `MPRAGE`. 2.0.0 found those directories with `--itemFileFilter 'glob:*.dcm'` and `--itemDirFilter`, but titled each child by its directory's last name and refused a plan in which two names were equal, so the layout failed. 2.1.0 titles each item by the shortest end of its path that no other item's title shares: `sub-01` where names are unique, `sub-01/MPRAGE` beside `sub-02/MPRAGE` where they are not. A title so chosen depends on the whole set of items, which would make reruns unreliable in general; it does not here, since a data node's output is fixed once the node has run. DICOM in CUBE always carries the `.dcm` extension, which the registration process gives it, so selection by name suffices and no content test was added.
 
+== 2.1.1: a failed child is not a done child
+
+The first run on ekanite, BCH's production CUBE, created two pl-freesurfer instances; pfcon cancelled one of them before it ran, failing to delete a resolved ChRIS-link source on its NFS-backed store, an intermittent fault outside pl-dymap. A rerun would then have skipped that item, since 2.1.0 counted any child with the item's title and the same plugin as done. 2.1.1 reads each child's status and does not count a child CUBE cancelled or that finished with an error, nor a workflow any of whose instances did, so a rerun makes those items again; a child still running counts, since it may yet succeed. The promise that a rerun after a partial failure creates only what is missing now covers failures of the children as well as failures to create them.
+
 == Versions
 
 [cols="1,4"]
@@ -34,4 +38,5 @@ The operator's DICOM data commonly holds several series directories per subject,
 | 1.0.0 | First release, verified live on miniChRIS with CUBE 6.11.0.
 | 2.0.0 | `--plugin` beside `--pipeline`; items chosen by `--itemFileFilter`, `--itemDirFilter` and `--itemDepth`, at any depth with a file filter; every non-primitive value a record in `models`.
 | 2.1.0 | Titles are the shortest unique end of each item's path, so series named alike under several subjects map.
+| 2.1.1 | A rerun makes again items whose child was cancelled or finished with an error.
 |===

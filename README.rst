@@ -38,7 +38,7 @@ pl-dymap does not wait for its children; it creates them and exits. Its output h
 * ``plan.json``, written before anything is created: the plugin or pipeline, and each item with the title and filter it gets.
 * ``created.json``, written after: for each item, whether it was posted, skipped or failed, with its plugin instances and workflow, or the reason it failed.
 
-Running it again does not duplicate work. An item whose child already hangs off the data node, with the item's name as its title and made from the same plugin or pipeline, is skipped, so a rerun after a partial failure creates only what is missing.
+Running it again does not duplicate work. An item whose child already hangs off the data node, with the item's title and made from the same plugin or pipeline, is skipped, so a rerun after a partial failure creates only what is missing. A child that ChRIS cancelled or that finished with an error does not count, nor does a workflow with such an instance, so a rerun makes those items again; a child still running counts.
 
 Choosing the items
 ------------------
