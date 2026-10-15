@@ -39,4 +39,5 @@ The first run on ekanite, BCH's production CUBE, created two pl-freesurfer insta
 | 2.0.0 | `--plugin` beside `--pipeline`; items chosen by `--itemFileFilter`, `--itemDirFilter` and `--itemDepth`, at any depth with a file filter; every non-primitive value a record in `models`.
 | 2.1.0 | Titles are the shortest unique end of each item's path, so series named alike under several subjects map.
 | 2.1.1 | A rerun makes again items whose child was cancelled or finished with an error.
+| 2.1.2 | `--man` and `--synopsis` are pftree 4.2's `ManualAction`: they print the manual and exit as they are read, so `dymap --man` needs no `/tmp /tmp`; the image's default command is `dymap --man`.
 |===

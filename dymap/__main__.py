@@ -13,7 +13,7 @@ Key components:
 Typical usage:
     dymap --plugin pl-freesurfer --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
     dymap --pipeline "FreeSurfer 8.2.0 per subject" --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
-    dymap --man /tmp /tmp
+    dymap --man
 
 Dependencies:
     - chris_plugin, pflog, pftree.manual, dymap.dymap
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from chris_plugin import chris_plugin
 from pflog import timed
-from pftree.manual import Manual, manual_print
+from pftree.manual import Manual, ManualAction, manual_attach
 
 from dymap import __version__
 from dymap.dymap import dymap_run
@@ -277,6 +277,8 @@ def parser_build() -> argparse.ArgumentParser:
     """The plugin's flags, without the positional directories ChRIS adds.
 
     Every flag is a plain ``store`` or ``store_true``, which chris_plugin serialises;
+    ``--man`` and ``--synopsis`` are pftree's ``ManualAction``, a ``store_true`` that
+    prints the manual and exits as it is read, so they need no directories;
     none is marked required, since ChRIS would then require it in every form, so a
     missing ``--plugin`` or ``--pipeline`` is caught in the run and exits 2.
 
@@ -313,9 +315,10 @@ def parser_build() -> argparse.ArgumentParser:
     parser.add_argument("--dryRun", action="store_true", default=False, help="write the plan, create nothing")
     parser.add_argument("--CUBEurl", default="", help="CUBE API root as reachable from the job; or CHRIS_URL")
     parser.add_argument("--verbosity", type=int, default=defaults.verbosity, help="0 silences the console")
-    parser.add_argument("--man", action="store_true", default=False, help="print the full manual")
-    parser.add_argument("--synopsis", action="store_true", default=False, help="print the manual's synopsis")
+    parser.add_argument("--man", action=ManualAction, default=False, help="print the full manual")
+    parser.add_argument("--synopsis", action=ManualAction, default=False, help="print the manual's synopsis")
     parser.add_argument("--version", action="version", version=f"dymap {__version__}")
+    manual_attach(parser, MANUAL)
     return parser
 
 
@@ -323,14 +326,11 @@ parser: argparse.ArgumentParser = parser_build()
 
 
 def dymap(options: argparse.Namespace, inputdir: Path, outputdir: Path) -> int:
-    """The plugin's body: the manual, or one run.
+    """The plugin's body: one run.
 
     Example:
-        dymap(parser.parse_args(["--man"]), Path("/tmp"), Path("/tmp"))
+        dymap(parser.parse_args(["--plugin", "pl-x", "--dryRun"]), Path("in"), Path("out"))
     """
-    if options.man or options.synopsis:
-        manual_print(MANUAL, shortOnly=not options.man)
-        return 0
     return dymap_run(Options.fromNamespace(options), inputdir, outputdir)
 
 

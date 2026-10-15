@@ -396,13 +396,26 @@ def test_parser_serialisesForChris_noRequiredFlags() -> None:
     assert "CUBEtoken" not in names and not any(action.required for action in parser._actions)
 
 
-def test_main_manual_andSpan(capsys: pytest.CaptureFixture[str]) -> None:
-    options: argparse.Namespace = parser.parse_args(["--man"])
-    assert main(options, Path("/tmp"), Path("/tmp")) == 0
-    captured = capsys.readouterr()
-    assert "--itemTemplate" in captured.out and "CHRIS_USER_TOKEN" in captured.out
-    span = json.loads(captured.err.strip().splitlines()[-1])
-    assert span["name"] == "dymap" and span["status"] is True
+def test_manual_exitsAsRead_needsNoDirectories(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.argv", ["dymap", "--man"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    out: str = capsys.readouterr().out
+    assert "--itemTemplate" in out and "CHRIS_USER_TOKEN" in out
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["--synopsis"])
+    assert exc.value.code == 0
+    assert "CHRIS_USER_TOKEN" not in capsys.readouterr().out
+
+
+def test_main_writesSpan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "in").mkdir()
+    assert main(parser.parse_args([]), tmp_path / "in", tmp_path / "out") == 2
+    span = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert span["name"] == "dymap" and span["status"] is False
 
 
 def test_chris_plugin_info_describesThePlugin() -> None:
@@ -573,7 +586,9 @@ def test_plugin_rejections_createNothing(tmp_path: Path) -> None:
 
 
 def test_options_fromNamespace_ignoresManualFlags() -> None:
-    options = Options.fromNamespace(parser.parse_args(["--plugin", PLUGIN, "--man"]))
+    namespace: argparse.Namespace = parser.parse_args(["--plugin", PLUGIN])
+    namespace.man = True
+    options = Options.fromNamespace(namespace)
     assert options.plugin == PLUGIN and options.selection.depthEffective == 1
 
 
