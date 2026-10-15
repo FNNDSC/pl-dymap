@@ -103,6 +103,7 @@ def instance_read(row: JsonRow) -> InstanceRef:
         previousId=row.integerOrNone("previous_id"),
         workflowId=row.integerOrNone("workflow_id"),
         pluginId=row.integerOrNone("plugin_id"),
+        status=row.text("status"),
     )
 
 

@@ -18,7 +18,7 @@ Dependencies:
 
 from __future__ import annotations
 
-__version__: str = "2.1.0"
+__version__: str = "2.1.1"
 
 from dymap.cube import CubeApi, CubeClient
 from dymap.models import (

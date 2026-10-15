@@ -408,7 +408,7 @@ def test_main_manual_andSpan(capsys: pytest.CaptureFixture[str]) -> None:
 def test_chris_plugin_info_describesThePlugin() -> None:
     binDir: Path = Path(sys.executable).parent
     spec = JobSpec(
-        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:2.1.0", "dymap"],
+        argv=[str(binDir / "chris_plugin_info"), "--dock-image", "docker.io/fnndsc/pl-dymap:2.1.1", "dymap"],
         env={"PATH": f"{binDir}{os.pathsep}{os.environ.get('PATH', '')}"},
     )
     result = job_run(spec)
@@ -575,3 +575,33 @@ def test_plugin_rejections_createNothing(tmp_path: Path) -> None:
 def test_options_fromNamespace_ignoresManualFlags() -> None:
     options = Options.fromNamespace(parser.parse_args(["--plugin", PLUGIN, "--man"]))
     assert options.plugin == PLUGIN and options.selection.depthEffective == 1
+
+
+def test_rerun_remakesCancelledOrFailedChildren_keepsRunningOnes(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("sub-01", "sub-02", "sub-03"))
+    cube = FakeCube()
+    options: list[str] = ["--plugin", PLUGIN, "--CUBEurl", cube.url]
+    assert run(options, inputDir, outputDir, cube) == 0
+    cube.instances[0].status = "cancelled"
+    cube.instances[1].status = "finishedWithError"
+    cube.instances[2].status = "started"
+    assert run(options, inputDir, outputDir, cube) == 0
+    record = json.loads((outputDir / "created.json").read_text())
+    assert [o["status"] for o in record["outcomes"]] == ["posted", "posted", "skipped"]
+    assert len(cube.instancesPosted) == 5
+    assert run(options, inputDir, outputDir, cube) == 0
+    assert json.loads((outputDir / "created.json").read_text())["counts"]["skipped"] == 3
+
+
+def test_rerun_remakesWorkflowWithAFailedInstance(tmp_path: Path) -> None:
+    inputDir, outputDir = inputTree_make(tmp_path, ("sub-01",))
+    cube = FakeCube()
+    options: list[str] = ["--pipeline", PIPELINE, "--CUBEurl", cube.url]
+    assert run(options, inputDir, outputDir, cube) == 0
+    cube.instances.append(
+        InstanceRef(
+            id=7777, title="next", previousId=1100, workflowId=100, pluginId=9, status="finishedWithError"
+        )
+    )
+    assert run(options, inputDir, outputDir, cube) == 0
+    assert len(cube.posted) == 2
