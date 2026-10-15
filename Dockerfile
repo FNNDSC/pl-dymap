@@ -17,4 +17,4 @@ WORKDIR /usr/local/src/pl-dymap
 COPY . .
 RUN pip install --no-cache-dir .
 
-CMD ["dymap", "--man", "/tmp", "/tmp"]
+CMD ["dymap", "--man"]

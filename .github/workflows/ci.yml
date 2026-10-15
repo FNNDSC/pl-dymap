@@ -98,6 +98,7 @@ jobs:
         run: |
           dock_image=${{ steps.info.outputs.local_tag }}
           docker run --rm $dock_image dymap --version
+          docker run --rm $dock_image dymap --man > /dev/null
           docker run --rm $dock_image chris_plugin_info --dock-image $dock_image dymap > /dev/null
 
       - name: Login to DockerHub
