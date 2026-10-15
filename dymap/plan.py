@@ -11,6 +11,7 @@ metal and written to the output directory before anything is created.
 Key components:
     - PlanRefused: why a plan cannot be made
     - items_find: the item paths in an input directory
+    - titles_assign: each item's title, the shortest end of its path unique among the items
     - itemValue_render: one item's value from the template
     - params_parse: the ``--params`` JSON, as settings
     - plan_build: the plan
@@ -34,6 +35,7 @@ from dymap.models import ItemSelection, JsonRow, Options, ParamSetting, ParamVal
 ITEM_PLACEHOLDER: str = "{item}"
 ITEM_REGEX_PLACEHOLDER: str = "{itemRegex}"
 FILTER_SEPARATOR: str = ","
+TITLE_MAX: int = 100
 
 
 class PlanRefused(Exception):
@@ -98,6 +100,55 @@ def items_find(inputDir: Path, selection: ItemSelection) -> list[str]:
             continue
         found.append(relPath)
     return sorted(found)
+
+
+def titles_assign(paths: list[str]) -> list[str]:
+    """Each item's title: the shortest end of its path that no other item's title shares.
+
+    An item whose last name is unique among the items is titled by that name alone;
+    items whose names repeat, as series directories named alike under several
+    subjects do, take as many of their parent directories as tell them apart. The
+    titles depend on the whole set of items, which for one data node never changes,
+    since a node's output is fixed once it has run; a rerun on the same node with the
+    same flags therefore gives the same titles, and recognises its earlier children.
+    A title longer than CUBE's limit of 100 characters keeps its end.
+
+    Args:
+        paths: the item paths, distinct, with ``/`` separators.
+
+    Returns:
+        The titles, in the order of ``paths``.
+
+    Raises:
+        PlanRefused: two titles left equal by the length limit.
+
+    Example:
+        >>> titles_assign(["link/sub-01", "link/sub-02"])
+        ['sub-01', 'sub-02']
+        >>> titles_assign(["sub-01/MPRAGE", "sub-02/MPRAGE", "sub-02/MPRAGE_2"])
+        ['sub-01/MPRAGE', 'sub-02/MPRAGE', 'MPRAGE_2']
+        >>> titles_assign(["a/x", "b/a/x"])
+        ['a/x', 'b/a/x']
+    """
+    parts: list[list[str]] = [path.split("/") for path in paths]
+    lengths: list[int] = [1] * len(paths)
+    while True:
+        titles: list[str] = ["/".join(names[-length:]) for names, length in zip(parts, lengths, strict=True)]
+        holders: dict[str, list[int]] = {}
+        for index, title in enumerate(titles):
+            holders.setdefault(title, []).append(index)
+        clashing: list[int] = [index for group in holders.values() if len(group) > 1 for index in group]
+        grown: bool = False
+        for index in clashing:
+            if lengths[index] < len(parts[index]):
+                lengths[index] += 1
+                grown = True
+        if not grown:
+            break
+    titles = [title[-TITLE_MAX:] for title in titles]
+    if len(set(titles)) != len(titles):
+        raise PlanRefused(f"item titles cut to {TITLE_MAX} characters are no longer unique")
+    return titles
 
 
 def itemValue_render(template: str, item: str) -> str:
@@ -199,10 +250,10 @@ def plan_build(
         The plan.
 
     Raises:
-        PlanRefused: no items; more items than ``--maxItems``; two items with the
-            same name, which would give two children one title; an item whose value
+        PlanRefused: no items; more items than ``--maxItems``; an item whose value
             would contain the filter grammar's comma, which would split it into two
-            tokens; or a template that names no item.
+            tokens; a template that names no item; or titles the length limit makes
+            equal.
 
     Example:
         >>> import tempfile; root = Path(tempfile.mkdtemp()); (root / "sub-01").mkdir()
@@ -214,13 +265,8 @@ def plan_build(
         raise PlanRefused("no items: no directory below the input passes the item selection")
     if len(paths) > options.maxItems:
         raise PlanRefused(f"{len(paths)} items exceed --maxItems {options.maxItems}")
-    titles: dict[str, str] = {}
     items: list[PlanItem] = []
-    for path in paths:
-        title: str = path.rsplit("/", 1)[-1]
-        if title in titles:
-            raise PlanRefused(f"items {titles[title]!r} and {path!r} share the name {title!r}")
-        titles[title] = path
+    for path, title in zip(paths, titles_assign(paths), strict=True):
         value: str = itemValue_render(options.itemTemplate, path)
         if options.itemParam.endswith("Filter") and FILTER_SEPARATOR in value:
             raise PlanRefused(f"item {path!r} would give the filter {value!r}, which a comma splits in two")

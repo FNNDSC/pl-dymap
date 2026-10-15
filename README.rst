@@ -49,7 +49,32 @@ The items are directories of the input, chosen by up to three conditions:
 * ``--itemDirFilter``: the directory's path below the input passes the filter, as ``re:(^|/)sub-[^/]*$``.
 * ``--itemDepth``: the directory is that far below the input.
 
-With a file filter and no depth, items are found at any depth. That matters because a data node often holds its data under a directory named for where it came from: pl-dircopy presents an upload as ``home_chris_uploads_subjects``, with the subjects inside. With no item flags at all, the items are the input's own subdirectories. The filters use the pf* stack's grammar: comma-separated tokens, each a substring, ``glob:``, ``re:`` or ``!`` negation. Items are titled by their own name, which must be unique among them.
+With a file filter and no depth, items are found at any depth. That matters because a data node often holds its data under a directory named for where it came from: pl-dircopy presents an upload as ``home_chris_uploads_subjects``, with the subjects inside. With no item flags at all, the items are the input's own subdirectories. The filters use the pf* stack's grammar: comma-separated tokens, each a substring, ``glob:``, ``re:`` or ``!`` negation.
+
+Each child is titled by its item's own name, ``sub-01``. Where names repeat, as series directories named alike under several subjects do, a title takes as much of the item's path as tells it apart: ``sub-01/MPRAGE``, ``sub-02/MPRAGE``. A data node's output never changes, so a rerun gives the same titles and recognises its earlier children.
+
+Some layouts and the flags for them:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Layout
+     - Flags
+     - Items
+   * - ``subjN/*.dcm``, each subject one T1 series
+     - ``--itemFileFilter 'glob:*.dcm'``
+     - ``subjN``
+   * - ``subjN/<series>/*.dcm``, only the MPRAGE series wanted
+     - ``--itemFileFilter 'glob:*.dcm' --itemDirFilter 're:MPRAGE[^/]*$'``
+     - ``subjN/MPRAGE...``, one per series
+   * - ``subjN/anat/*.nii.gz``
+     - ``--itemFileFilter 're:\.nii(\.gz)?$'``
+     - ``subjN/anat``
+   * - any of these under a pl-dircopy node
+     - the same; any depth absorbs the node's link directory
+     - the same
+
+The child plugin must still pick the right file within its item: for pl-freesurfer reading DICOM, ``--params '{"fileFilter": "glob:*.dcm"}'``.
 
 Guards
 ------

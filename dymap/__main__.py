@@ -193,8 +193,10 @@ SYNOPSIS_FULL: str = (
         How far below the input the items are, 1 for its own
         subdirectories. Default 0: any depth when ``--itemFileFilter`` is set,
         and 1 when it is not. Directories whose names start with a period are
-        never items, and the input itself is never one. Items are titled by
-        their own name, which must be unique among them.
+        never items, and the input itself is never one. Each child is titled
+        by its item's own name, or, where names repeat, as series directories
+        named alike under several subjects do, by as much of the item's path
+        as tells it apart: sub-01/MPRAGE, sub-02/MPRAGE.
 
         [--maxItems <n>]
         The most items one run may create. Default 100. A larger input is
@@ -221,7 +223,15 @@ SYNOPSIS_FULL: str = (
     One FreeSurfer instance per directory holding a NIfTI volume, at any
     depth:
 
-        dymap --plugin pl-freesurfer@1.0.0 --itemFileFilter 'glob:*.nii.gz'     \\
+        dymap --plugin pl-freesurfer@1.0.1 --itemFileFilter 'glob:*.nii.gz'     \\
+              --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
+
+    One FreeSurfer instance per MPRAGE series, where each subject holds
+    several series directories; the instance reads that series' DICOM:
+
+        dymap --plugin pl-freesurfer --itemFileFilter 'glob:*.dcm'              \\
+              --itemDirFilter 're:MPRAGE[^/]*$'                                 \\
+              --params '{{"fileFilter": "glob:*.dcm"}}'                         \\
               --CUBEurl http://cube:8000/api/v1/ /incoming /outgoing
 
     One workflow of a pipeline per subdirectory of the input:
